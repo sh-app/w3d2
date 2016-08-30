@@ -62,6 +62,8 @@ VALUES
   ('How much do donuts cost?', 'Is it more than a dollar?',
     (SELECT id FROM users WHERE fname = 'Homer')),
   ('When is snow day?', 'Is it tomorrow?',
+    (SELECT id FROM users WHERE fname = 'Bart')),
+  ('Skateboard?', 'Where''s my skateboard, man?',
     (SELECT id FROM users WHERE fname = 'Bart'));
 
 INSERT INTO
@@ -83,4 +85,8 @@ INSERT INTO
   question_likes (user_id, question_id)
 VALUES
   ((SELECT id FROM users WHERE fname= 'Homer'),
-    (SELECT id FROM questions WHERE title = 'How much do donuts cost?'));
+    (SELECT id FROM questions WHERE title = 'How much do donuts cost?')),
+  ((SELECT id FROM users WHERE fname= 'Homer'),
+    (SELECT id FROM questions WHERE title = 'When is snow day?')),
+  ((SELECT id FROM users WHERE fname= 'Groundskeeper'),
+    (SELECT id FROM questions WHERE title = 'When is snow day?'));
