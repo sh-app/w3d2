@@ -1,6 +1,7 @@
 
 require 'sqlite3'
 require 'singleton'
+require 'byebug'
 
 class QuestionsDatabase < SQLite3::Database
   include Singleton
@@ -12,21 +13,149 @@ class QuestionsDatabase < SQLite3::Database
   end
 end
 
-class User
-  attr_accessor :id, :fname, :lname
+class ModelBase
+
+  def self.method_missing(method_name, *args)
+    method_name = method_name.to_s
+    if method_name.start_with?("find_by_")
+      method_name = method_name[8..-1]
+      fields = method_name.split('_and_')
+      params = {}
+      fields.each_with_index do |field, i|
+        params[field] = args[i]
+      end
+      self.where(params)
+    else
+      super
+    end
+  end
 
   def self.find_by_id(id)
     data = QuestionsDatabase.instance.execute(<<-SQL, id)
       SELECT
         *
       FROM
-        users
+        #{self.table}
       WHERE
         id = ?;
     SQL
     return nil if data.empty?
 
     self.new(data.first)
+  end
+
+  def self.where(params)
+    if params.is_a?(Hash)
+      where_arr = []
+
+      params.each do |field, value|
+        where_arr << "#{field} = ?"
+      end
+
+      where_string = where_arr.join(" AND ")
+
+      data = QuestionsDatabase.instance.execute(<<-SQL, *params.values)
+        SELECT
+          *
+        FROM
+          #{self.table}
+        WHERE
+          #{where_string};
+      SQL
+    elsif params.is_a?(String)
+      where_string = params
+      data = QuestionsDatabase.instance.execute(<<-SQL)
+        SELECT
+          *
+        FROM
+          #{self.table}
+        WHERE
+          #{where_string};
+      SQL
+    else
+      raise ArgumentError.new("argument must be a Hash or String")
+    end
+
+    return nil if data.empty?
+
+    data.map { |datum| self.new(datum) }
+  end
+
+  def self.all
+    data = QuestionsDatabase.instance.execute(<<-SQL)
+      SELECT
+        *
+      FROM
+        #{self.table}
+    SQL
+
+    return nil if data.empty?
+
+    data.map { |datum| self.new(datum) }
+  end
+
+  def i_var_names_without_id
+    i_vars_without_id.map { |i_var| i_var.to_s[1..-1] }.join(", ")
+  end
+
+  def i_vars_without_id
+    instance_variables.dup.delete(:@id)
+  end
+
+  def i_var_values_without_id
+    i_vars_without_id.map do |i_var_sym|
+      instance_variable_get(i_var_sym.to_s)
+    end
+  end
+
+  def i_var_values_with_id
+    i_var_values_without_id + [id]
+  end
+
+  def question_marks(num)
+    q_marks = []
+    num.times do
+      q_marks << '?'
+    end
+    q_marks.join(', ')
+  end
+
+  def set_string
+    i_vars_without_id.map { |i_var| i_var.to_s[1..-1] }.join(" = ?, ") + " = ?"
+  end
+
+  def save
+    unless @id
+      QuestionsDatabase.instance.execute(<<-SQL, *i_var_values_without_id)
+        INSERT INTO
+          #{self.table} (#{i_var_names_without_id})
+        VALUES
+        (#{question_marks(i_var_names_without_id.length)});
+      SQL
+
+      @id = QuestionsDatabase.instance.last_insert_row_id
+    else
+      QuestionsDatabase.instance.execute(<<-SQL, *i_var_values_with_id)
+        UPDATE
+          #{self.table}
+        SET
+          #{set_string}
+        WHERE
+          id = ?
+      SQL
+    end
+  end
+
+
+
+end
+
+
+class User < ModelBase
+  attr_accessor :id, :fname, :lname
+
+  def self.table
+    'users'
   end
 
   def self.find_by_name(fname, lname)
@@ -78,32 +207,14 @@ class User
     data.first.values.first
   end
 
-  def save
-    unless @id
-      QuestionsDatabase.instance.execute(<<-SQL, fname, lname)
-        INSERT INTO
-          users (fname, lname)
-        VALUES
-          (?, ?);
-      SQL
-
-      @id = QuestionsDatabase.instance.last_insert_row_id
-    else
-      QuestionsDatabase.instance.execute(<<-SQL, fname, lname, id)
-        UPDATE
-          users
-        SET
-          fname = ?, lname = ?
-        WHERE
-          id = ?;
-      SQL
-    end
-  end
-
 end
 
-class Question
+class Question < ModelBase
   attr_accessor :id, :title, :body, :author_id
+
+  def self.table
+    'questions'
+  end
 
   def self.find_by_author_id(author_id)
     data = QuestionsDatabase.instance.execute(<<-SQL, author_id)
@@ -117,20 +228,6 @@ class Question
     return nil if data.empty?
 
     data.map { |datum| self.new(datum) }
-  end
-
-  def self.find_by_id(id)
-    data = QuestionsDatabase.instance.execute(<<-SQL, id)
-      SELECT
-        *
-      FROM
-        questions
-      WHERE
-        id = ?;
-    SQL
-    return nil if data.empty?
-
-    self.new(data.first)
   end
 
   def self.most_followed(n)
@@ -168,46 +265,14 @@ class Question
     QuestionLike.num_likes_for_question_id(id)
   end
 
-  def save
-    unless @id
-      QuestionsDatabase.instance.execute(<<-SQL, title, body, author_id)
-        INSERT INTO
-          questions (title, body, author_id)
-        VALUES
-          (?, ?, ?);
-      SQL
-
-      @id = QuestionsDatabase.instance.last_insert_row_id
-    else
-      QuestionsDatabase.instance.execute(<<-SQL, title, body, author_id, id)
-        UPDATE
-          questions
-        SET
-          title = ?, body = ?, author_id = ?
-        WHERE
-          id = ?;
-      SQL
-    end
-  end
-
 end
 
-class Reply
+class Reply < ModelBase
 
   attr_accessor :id, :user_id, :question_id, :parent_reply_id, :body
 
-  def self.find_by_id(id)
-    data = QuestionsDatabase.instance.execute(<<-SQL, id)
-      SELECT
-        *
-      FROM
-        replies
-      WHERE
-        id = ?;
-    SQL
-    return nil if data.empty?
-
-    self.new(data.first)
+  def self.table
+    'replies'
   end
 
   def self.find_by_user_id(user_id)
@@ -271,47 +336,13 @@ class Reply
     children.map { |child| Reply.new(child) }
   end
 
-  def save
-    unless id
-      QuestionsDatabase.instance
-        .execute(<<-SQL, user_id, question_id, parent_reply_id, body)
-        INSERT INTO
-          replies (user_id, question_id, parent_reply_id, body)
-        VALUES
-          (?, ?, ?, ?);
-      SQL
-
-      @id = QuestionsDatabase.instance.last_insert_row_id
-    else
-      QuestionsDatabase.instance
-        .execute(<<-SQL, user_id, question_id, parent_reply_id, body, id)
-        UPDATE
-          replies
-        SET
-          user_id = ?, question_id = ?, parent_reply_id = ?, body = ?
-        WHERE
-          id = ?;
-      SQL
-    end
-  end
-
 end
 
-class QuestionFollow
+class QuestionFollow < ModelBase
   attr_accessor :id, :user_id, :question_id
 
-  def self.find_by_id(id)
-    data = QuestionsDatabase.instance.execute(<<-SQL, id)
-      SELECT
-        *
-      FROM
-        question_follows
-      WHERE
-        id = ?;
-    SQL
-    return nil if data.empty?
-
-    self.new(data.first)
+  def self.table
+    'question_follows'
   end
 
   def self.followers_for_question_id(question_id)
@@ -376,91 +407,81 @@ class QuestionFollow
   end
 end
 
-class QuestionLike
+class QuestionLike < ModelBase
   attr_accessor :id, :user_id, :question_id
 
-    def self.find_by_id(id)
-      data = QuestionsDatabase.instance.execute(<<-SQL, id)
-        SELECT
-          *
-        FROM
-          question_likes
-        WHERE
-          id = ?;
-      SQL
-      return nil if data.empty?
+  def self.table
+    'question_likes'
+  end
 
-      self.new(data.first)
-    end
+  def self.likers_for_question_id(question_id)
+    data = QuestionsDatabase.instance.execute(<<-SQL, question_id)
+      SELECT
+        users.*
+      FROM
+        users
+      JOIN
+        questions_likes ON questions_likes.user_id = users.id
+      WHERE
+        question_id = ?
+    SQL
+    return nil if data.empty?
+    data.map { |datum| User.new(datum) }
+  end
 
-    def self.likers_for_question_id(question_id)
-      data = QuestionsDatabase.instance.execute(<<-SQL, question_id)
-        SELECT
-          users.*
-        FROM
-          users
-        JOIN
-          questions_likes ON questions_likes.user_id = users.id
-        WHERE
-          question_id = ?
-      SQL
-      return nil if data.empty?
-      data.map { |datum| User.new(datum) }
-    end
+  def self.num_likes_for_question_id(question_id)
+    data = QuestionsDatabase.instance.execute(<<-SQL, question_id)
+      SELECT
+        COUNT(*)
+      FROM
+        questions_likes
+      WHERE
+        question_id = ?;
+    SQL
 
-    def self.num_likes_for_question_id(question_id)
-      data = QuestionsDatabase.instance.execute(<<-SQL, question_id)
-        SELECT
-          COUNT(*)
-        FROM
-          questions_likes
-        WHERE
-          question_id = ?;
-      SQL
+    data.first
+  end
 
-      data.first
-    end
+  def self.liked_question_for_user_id(user_id)
+    data = QuestionsDatabase.instance.execute(<<-SQL, user_id)
+      SELECT
+        questions.*
+      FROM
+        questions
+      JOIN
+        question_likes ON question_likes.question_id = questions.id
+      JOIN
+        users ON question_likes.user_id = users.id
+      WHERE
+        user_id = ?;
+    SQL
+    return nil if data.empty?
 
-    def self.liked_question_for_user_id(user_id)
-      data = QuestionsDatabase.instance.execute(<<-SQL, user_id)
-        SELECT
-          questions.*
-        FROM
-          questions
-        JOIN
-          question_likes ON question_likes.question_id = questions.id
-        JOIN
-          users ON question_likes.user_id = users.id
-        WHERE
-          user_id = ?;
-      SQL
-      return nil if data.empty?
+    data.map { |datum| Question.new(datum) }
+  end
 
-      data.map { |datum| Question.new(datum) }
-    end
+  def self.most_liked_questions(n)
+    data = QuestionsDatabase.instance.execute(<<-SQL, n)
+      SELECT
+        questions.*
+      FROM
+        questions
+      JOIN
+        question_likes ON question_likes.question_id = questions.id
+      GROUP BY
+        questions.id
+      ORDER BY
+        COUNT(*) DESC
+      LIMIT ?;
+    SQL
+    return nil if data.empty?
 
-    def self.most_liked_questions(n)
-      data = QuestionsDatabase.instance.execute(<<-SQL, n)
-        SELECT
-          questions.*
-        FROM
-          questions
-        JOIN
-          question_likes ON question_likes.question_id = questions.id
-        GROUP BY
-          questions.id
-        ORDER BY
-          COUNT(*) DESC
-        LIMIT ?;
-      SQL
-      return nil if data.empty?
+    data.map { |datum| Question.new(datum) }
+  end
 
-      data.map { |datum| Question.new(datum) }
-    end
-
-    def initialize(data)
-      @id = data['id']
-      @user_id = data['user_id']
-      @question_id = data['question_id']
-    end
+  def initialize(data)
+    @id = data['id']
+    @user_id = data['user_id']
+    @question_id = data['question_id']
+  end
 end
